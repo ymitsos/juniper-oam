@@ -1,0 +1,93 @@
+version 1.0;
+ns junos = "http://xml.juniper.net/junos/*/junos";
+ns xnm = "http://xml.juniper.net/xnm/1.1/xnm";
+ns jcs = "http://xml.juniper.net/junos/commit-scripts/1.0";
+import "../import/junos.xsl";
+
+/*-------------------------------------------------*/
+/* A SLAX script providing a comprehensive         */
+/* overview of OAM measurements for all configured */
+/* maintenance domains. Written by Yannis Mitsos   */
+/*-------------------------------------------------*/
+
+match / {
+    <op-script-results> {
+
+/* Get OAM configuration */
+        var $rpc = <get-configuration database="committed"> {
+                <configuration> {
+                    <protocols> {
+                        <oam> {
+                                <ethernet> {
+                                        <connectivity-fault-management>;
+                                }
+                        }
+                    }
+                }
+            }
+        var $config = jcs:invoke( $rpc );
+
+        var $maintenance-domains = $config/protocols/oam/ethernet/connectivity-fault-management/maintenance-domain;
+
+        <output> "";
+        <output> "";
+        <output> "+------------------------------------------------------------------------------------------------------------+";
+        <output> jcs:printf('|%-30s |%-10s |%-10s |%-10s |%-10s |%-20s |%-5s |\n',"Maintenance domain","Local MEP","Remote MEP","2way delay", "Jitter", "MAC", "State");
+        <output> "+------------------------------------------------------------------------------------------------------------+";
+
+        /* parse all available maintenace domains and exrtact measurements  */
+        /* if no remote mep is configure, read the meb-database and exrtact */
+        /* the necessary information                                        */
+
+       for-each ( $maintenance-domains ) {
+     
+            if ( jcs:empty (./maintenance-association/mep/remote-mep) ) {
+                var $cfmif = <get-cfm-interfaces-information> {
+                                <interface-name> ./maintenance-association/mep/interface/interface-name;
+                                <detail>;
+                    }
+                var $cfmif-result = jcs:invoke( $cfmif );
+
+                if( $cfmif-result/..//xnm:error ) {
+                        copy-of $cfmif-result;
+                        <xsl:message terminate="yes"> "Error, couldn't fetch interface information. Aborting";
+                }
+
+                <output> jcs:printf('|%-30s |%-10s |%-10s |%-10s |%-10s |%-20s |%-5s |\n',./name, ./maintenance-association/mep/name, $cfmif-result/cfm-entry/cfm-interface-sessions/cfm-interface-session/cfm-interface-remote-meps/cfm-remote-mep/cfm-remote-mep-identifier, "N/A", "N/A", $cfmif-result/cfm-entry/cfm-interface-sessions/cfm-interface-session/cfm-interface-remote-meps/cfm-remote-mep/cfm-remote-mep-mac-address, $cfmif-result/cfm-entry/cfm-interface-sessions/cfm-interface-session/cfm-interface-remote-meps/cfm-remote-mep/cfm-remote-mep-state);
+
+            }
+            else {
+                var $mrpc = <get-cfm-iterator-statistics> {
+                                <sla-iterator> "delay-measurement";
+                                <maintenance-domain> ./name;
+                                <maintenance-association> "vpn";
+                                <local-mep> ./maintenance-association/mep/name;
+                                <remote-mep> ./maintenance-association/mep/remote-mep/name;
+                        }
+                var $measurement-result = jcs:invoke( $mrpc );
+
+                if( $measurement-result/..//xnm:error ) {
+                        copy-of $measurement-result;
+                        <xsl:message terminate="yes"> "Error, couldn't fetch measurement results. Aborting";
+                }
+
+                var $mepdb = <get-cfm-mep-database> {
+                                <maintenance-domain> ./name;
+                                <maintenance-association> "vpn";
+                                <local-mep> ./maintenance-association/mep/name;
+                                <remote-mep> ./maintenance-association/mep/remote-mep/name;
+                    }
+
+                var $mepdb-result = jcs:invoke( $mepdb );
+                
+                if( $mepdb-result/..//xnm:error ) {
+                        copy-of $mepdb-result;
+                        <xsl:message terminate="yes"> "Error, couldn't fetch MEP database. Aborting";
+                }
+
+                <output> jcs:printf('|%-30s |%-10s |%-10s |%-10s |%-10s |%-20s |%-5s |\n',./name,./maintenance-association/mep/name, ./maintenance-association/mep/remote-mep/name, $measurement-result/cfm-entry/cfm-iter-ethdm-entry/cfm-average-twoway-delay, $measurement-result/cfm-entry/cfm-iter-ethdm-entry/cfm-average-oneway-fwd-delay-variation, $mepdb-result/cfm-entry/cfm-remote-meps/cfm-remote-mep/cfm-remote-mep-mac-address, $mepdb-result/cfm-entry/cfm-remote-meps/cfm-remote-mep/cfm-remote-mep-state);
+            }
+        }
+        <output> "+-------------------------------------------------------------------------------------------------------------+";
+    }
+}
